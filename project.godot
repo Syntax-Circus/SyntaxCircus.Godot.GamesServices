@@ -1,0 +1,6 @@
+; Test host for the addon: lets the headless GDScript tests resolve res://addons/syntaxcircus_games/.
+config_version=5
+
+[application]
+config/name="SyntaxCircus.Godot.GamesServices tests"
+config/features=PackedStringArray("4.7")

@@ -1,0 +1,12 @@
+.godot/
+.import/
+*.uid
+dist/
+android/.gradle/
+android/build/
+android/local.properties
+android/**/build/
+*.iml
+.idea/
+# The release AARs are the one place a bin/ folder is committed.
+!addons/syntaxcircus_games/bin/
