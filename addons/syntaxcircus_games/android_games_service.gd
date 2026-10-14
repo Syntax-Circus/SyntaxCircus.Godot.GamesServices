@@ -13,7 +13,8 @@ const SPAN_ALL_TIME := 2
 var _plugin: Object
 var _initialized := false
 var _signed_in := false
-var _next_request := 0
+## Native callbacks broadcast through one singleton, so IDs must remain unique when adapters are replaced.
+static var _next_request := 0
 var _pending: Dictionary = {} # request id -> {kind, board, value, id}
 
 static func available() -> bool:
@@ -28,6 +29,8 @@ func _init(plugin: Object = null) -> void:
 		return
 	_plugin.connect("sign_in_result", _on_sign_in_result)
 	_plugin.connect("score_result", _on_score_result)
+	if _plugin.has_signal("rank_result"):
+		_plugin.connect("rank_result", _on_rank_result)
 	_plugin.connect("achievement_result", _on_achievement_result)
 	_plugin.connect("board_closed", _on_board_closed)
 
@@ -61,6 +64,16 @@ func submit_score(board_id: String, value: int) -> void:
 		score_finished.emit(outcome(CODE_SIGNED_OUT, extra))
 		return
 	_plugin.call("submit_score", board_id, value, _request({"kind": "score", "board": board_id, "value": value}))
+
+func load_player_rank(board_id: String, request: int = 0) -> void:
+	var extra := {"board": board_id, "rank": 0, "request": request}
+	if _plugin == null or not _plugin.has_method("load_player_rank") or not _plugin.has_signal("rank_result"):
+		rank_finished.emit(outcome(CODE_UNAVAILABLE, extra))
+		return
+	if not _signed_in:
+		rank_finished.emit(outcome(CODE_SIGNED_OUT, extra))
+		return
+	_plugin.call("load_player_rank", board_id, _request({"kind": "rank", "board": board_id, "request": request}))
 
 func show_board(board_id: String, weekly := false) -> void:
 	if _plugin == null or not _signed_in:
@@ -121,6 +134,15 @@ func _on_score_result(request: int, status: String, _message: String) -> void:
 	if status == CODE_SIGNED_OUT:
 		_signed_in = false
 	score_finished.emit(outcome(_known(status), {"board": entry.board, "value": entry.value}))
+
+func _on_rank_result(request: int, status: String, rank: int, _message: String) -> void:
+	var entry := _take(request, "rank")
+	if entry.is_empty():
+		return
+	if status == CODE_SIGNED_OUT:
+		_signed_in = false
+	var code := _known(status)
+	rank_finished.emit(outcome(code, {"board": entry.board, "rank": maxi(0, rank) if code == CODE_COMPLETED else 0, "request": entry.request}))
 
 func _on_achievement_result(request: int, status: String, _message: String) -> void:
 	var entry := _take(request, "achievement")

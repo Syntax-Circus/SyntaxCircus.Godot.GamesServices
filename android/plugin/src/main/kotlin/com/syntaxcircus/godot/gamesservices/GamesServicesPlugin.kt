@@ -7,6 +7,7 @@ import com.google.android.gms.common.api.CommonStatusCodes
 import com.google.android.gms.games.GamesClientStatusCodes
 import com.google.android.gms.games.PlayGames
 import com.google.android.gms.games.PlayGamesSdk
+import com.google.android.gms.games.leaderboard.LeaderboardVariant
 import com.google.android.gms.tasks.Task
 import org.godotengine.godot.Godot
 import org.godotengine.godot.plugin.GodotPlugin
@@ -46,6 +47,7 @@ class GamesServicesPlugin(godot: Godot) : GodotPlugin(godot) {
 
     private val signInResult = SignalInfo("sign_in_result", Int::class.javaObjectType, String::class.java, String::class.java)
     private val scoreResult = SignalInfo("score_result", Int::class.javaObjectType, String::class.java, String::class.java)
+    private val rankResult = SignalInfo("rank_result", Int::class.javaObjectType, String::class.java, Long::class.javaObjectType, String::class.java)
     private val achievementResult = SignalInfo("achievement_result", Int::class.javaObjectType, String::class.java, String::class.java)
     private val boardClosed = SignalInfo("board_closed", Int::class.javaObjectType)
 
@@ -54,7 +56,7 @@ class GamesServicesPlugin(godot: Godot) : GodotPlugin(godot) {
 
     override fun getPluginName(): String = PLUGIN_NAME
 
-    override fun getPluginSignals(): MutableSet<SignalInfo> = mutableSetOf(signInResult, scoreResult, achievementResult, boardClosed)
+    override fun getPluginSignals(): MutableSet<SignalInfo> = mutableSetOf(signInResult, scoreResult, rankResult, achievementResult, boardClosed)
 
     /** Starts the Play Games SDK. The game calls this from its first sign in, never at app start. */
     @UsedByGodot
@@ -100,6 +102,23 @@ class GamesServicesPlugin(godot: Godot) : GodotPlugin(godot) {
         PlayGames.getLeaderboardsClient(host).submitScoreImmediate(board, score.toLong()).addOnCompleteListener { task ->
             if (task.isSuccessful) answer(scoreResult, request, StatusMapper.COMPLETED, "")
             else answer(scoreResult, request, statusOf(task), messageOf(task))
+        }
+    }
+
+    /** The current player's global public all-time rank, or zero when no ranked score exists. */
+    @UsedByGodot
+    fun load_player_rank(board: String, request: Int) {
+        val host = activity ?: return answerRank(request, StatusMapper.UNAVAILABLE, 0, "no activity")
+        if (!authenticated) return answerRank(request, StatusMapper.SIGNED_OUT, 0, "")
+        PlayGames.getLeaderboardsClient(host).loadCurrentPlayerLeaderboardScore(
+            board, LeaderboardVariant.TIME_SPAN_ALL_TIME, LeaderboardVariant.COLLECTION_PUBLIC,
+        ).addOnCompleteListener { task ->
+            if (task.isSuccessful) {
+                val result = task.result
+                // Cached/stale results cannot establish a current top-ten achievement.
+                if (result.isStale) answerRank(request, StatusMapper.UNAVAILABLE, 0, "stale rank")
+                else answerRank(request, StatusMapper.COMPLETED, (result.get()?.rank ?: 0L).coerceAtLeast(0L), "")
+            } else answerRank(request, statusOf(task), 0, messageOf(task))
         }
     }
 
@@ -173,6 +192,10 @@ class GamesServicesPlugin(godot: Godot) : GodotPlugin(godot) {
         val error = task.exception ?: return ""
         val code = (error as? ApiException)?.statusCode
         return if (code != null) "${error.javaClass.simpleName}:$code" else error.javaClass.simpleName
+    }
+
+    private fun answerRank(request: Int, status: String, rank: Long, message: String) {
+        runOnHostThread { emitSignal(rankResult, request, status, rank, message) }
     }
 
     private fun answer(signal: SignalInfo, request: Int, status: String, message: String) {

@@ -7,6 +7,11 @@ var sign_in_succeeds := true
 var score_code := "completed"
 var achievement_code := "completed"
 var hold := false
+var player_rank := 0
+var rank_code := "completed"
+var hold_rank := false
+var loaded_ranks: Array = []
+var rank_requests: Array = []
 var failing_boards: Array = [] # platform board ids that always answer "failed"
 var submitted: Array = []
 var unlocked: Array = []
@@ -39,6 +44,16 @@ func submit_score(board_id: String, value: int) -> void:
 func finish_score(code: String) -> void:
 	var last: Dictionary = submitted.back() if not submitted.is_empty() else {"board": "", "value": 0}
 	score_finished.emit(outcome(code, {"board": last.board, "value": last.value}))
+
+func load_player_rank(board_id: String, request: int = 0) -> void:
+	loaded_ranks.append(board_id)
+	rank_requests.append({"board": board_id, "request": request})
+	if not hold_rank:
+		finish_rank(rank_code, player_rank)
+
+func finish_rank(code: String, rank: int) -> void:
+	var last: Dictionary = rank_requests.back() if not rank_requests.is_empty() else {"board": "", "request": 0}
+	rank_finished.emit(outcome(code, {"board": last.board, "rank": maxi(0, rank) if code == CODE_COMPLETED else 0, "request": last.request}))
 
 func show_board(board_id: String, weekly := false) -> void:
 	shown_boards.append(board_id)

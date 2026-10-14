@@ -30,6 +30,18 @@ class FakeKit extends Object:
 				total += 1
 		return total
 
+class RankKit extends FakeKit:
+	signal player_rank_loaded(ok: bool, board: String, rank: int, request: int, error: String)
+	func load_player_rank(board_id: String, request: int) -> void:
+		calls.append(["load_player_rank", board_id, request])
+
+class MethodOnlyKit extends FakeKit:
+	func load_player_rank(_board_id: String, _request: int) -> void:
+		pass
+
+class SignalOnlyKit extends FakeKit:
+	signal player_rank_loaded(ok: bool, board: String, rank: int, request: int, error: String)
+
 var failures: Array[String] = []
 var checks := 0
 var answers: Array = []
@@ -50,6 +62,8 @@ func run() -> void:
 	test_error_classification()
 	test_scores_and_achievements()
 	test_panels()
+	test_player_rank()
+	test_rank_unavailable_and_signed_out()
 	print("APPLE GAMES SERVICE TESTS: %d checks, %d failures" % [checks, failures.size()])
 	quit(0 if failures.is_empty() else 1)
 
@@ -58,6 +72,7 @@ func listen(service: RefCounted) -> void:
 	service.sign_in_finished.connect(func(result: Dictionary): answers.append(["sign_in", result]))
 	service.score_finished.connect(func(result: Dictionary): answers.append(["score", result]))
 	service.achievement_finished.connect(func(result: Dictionary): answers.append(["achievement", result]))
+	service.rank_finished.connect(func(result: Dictionary): answers.append(["rank", result]))
 	service.board_closed.connect(func(): answers.append(["board_closed", {}]))
 
 func signed_in(kit: FakeKit) -> RefCounted:
@@ -161,3 +176,48 @@ func test_panels() -> void:
 	kit.panel_closed.emit("leaderboard")
 	check(answers.size() == 2, "A stray panel signal is ignored")
 	kit.free()
+
+func test_player_rank() -> void:
+	var kit := RankKit.new()
+	var service = signed_in(kit)
+	service.load_player_rank("wfpdaily", 41)
+	check(answers.is_empty() and kit.calls.back() == ["load_player_rank", "wfpdaily", 41], "Rank waits for native response with board and request token")
+	kit.player_rank_loaded.emit(true, "wrong_board", 1, 41, "")
+	kit.player_rank_loaded.emit(true, "wfpdaily", 1, 999, "")
+	check(answers.is_empty(), "Wrong board and unsolicited token do not answer a pending rank")
+	service.load_player_rank("wfplongestfling", 42)
+	kit.player_rank_loaded.emit(true, "wfplongestfling", 12, 42, "")
+	kit.player_rank_loaded.emit(true, "wfpdaily", 7, 41, "")
+	check(answers.size() == 2 and answers[0][1] == {"ok": true, "code": "completed", "board": "wfplongestfling", "rank": 12, "request": 42} and answers[1][1].rank == 7, "Out of order ranks retain board, placement and token")
+	kit.player_rank_loaded.emit(true, "wfpdaily", 1, 41, "")
+	check(answers.size() == 2, "Duplicate native rank response is ignored")
+	service.load_player_rank("wfpdaily", 43)
+	kit.player_rank_loaded.emit(true, "wfpdaily", 0, 43, "")
+	check(answers.back()[1].ok and answers.back()[1].rank == 0, "No local score is a completed zero rank, never a winning placement")
+	service.load_player_rank("wfpdaily", 44)
+	kit.player_rank_loaded.emit(false, "wfpdaily", 1, 44, "The Internet connection appears to be offline.")
+	check(answers.back()[1].code == "unavailable" and answers.back()[1].rank == 0 and service.is_signed_in(), "Offline rank errors are unavailable and cannot carry a positive rank")
+	service.load_player_rank("wfpdaily", 45)
+	kit.player_rank_loaded.emit(false, "wfpdaily", 1, 45, "unknown leaderboard")
+	check(answers.back()[1].code == "failed" and answers.back()[1].rank == 0, "Unknown boards fail without a positive rank")
+	service.load_player_rank("wfpdaily", 46)
+	kit.player_rank_loaded.emit(false, "wfpdaily", 1, 46, "The local player has not been authenticated")
+	check(answers.back()[1].code == "signed_out" and not service.is_signed_in(), "Authentication loss during rank signs the adapter out")
+	kit.free()
+
+func test_rank_unavailable_and_signed_out() -> void:
+	var absent = Apple.new()
+	listen(absent)
+	absent.load_player_rank("wfpdaily", 51)
+	check(answers.size() == 1 and answers[0][1] == {"ok": false, "code": "unavailable", "board": "wfpdaily", "rank": 0, "request": 51}, "Absent plugin answers rank unavailable with correlation fields")
+	var kit := RankKit.new()
+	var service = Apple.new(kit)
+	listen(service)
+	service.load_player_rank("wfpdaily", 52)
+	check(answers.size() == 1 and answers[0][1].code == "signed_out" and kit.calls.is_empty(), "Signed out rank does not invoke native code")
+	kit.free()
+	for legacy: FakeKit in [FakeKit.new(), MethodOnlyKit.new(), SignalOnlyKit.new()]:
+		var old_service = signed_in(legacy)
+		old_service.load_player_rank("wfpdaily", 53)
+		check(answers.size() == 1 and answers[0][1].code == "unavailable" and answers[0][1].rank == 0, "Older plugin missing either rank method or signal answers unavailable")
+		legacy.free()

@@ -8,6 +8,7 @@ extends RefCounted
 ## (an unknown board id, a rejected value). Cancelling a native board is a normal outcome, never an error.
 signal sign_in_finished(result: Dictionary)
 signal score_finished(result: Dictionary)
+signal rank_finished(result: Dictionary)
 signal achievement_finished(result: Dictionary)
 signal board_closed
 
@@ -39,6 +40,10 @@ func sign_in() -> void:
 ## `board_id` is the platform's id (platform_ids.gd). Exactly one score_finished with {board, value} follows.
 func submit_score(board_id: String, value: int) -> void:
 	score_finished.emit(outcome(CODE_UNAVAILABLE, {"board": board_id, "value": value}))
+
+## Global public all-time, one-based player rank. Zero means no ranked score. Echoes the caller's request token.
+func load_player_rank(board_id: String, request: int = 0) -> void:
+	rank_finished.emit(outcome(CODE_UNAVAILABLE, {"board": board_id, "rank": 0, "request": request}))
 
 ## Opens the platform's UI for one board. `weekly` asks for the weekly span (the Play Games Daily boards, platform-mapping.md); adapters
 ## for platforms without time spans ignore it. board_closed follows when the platform says it was dismissed.

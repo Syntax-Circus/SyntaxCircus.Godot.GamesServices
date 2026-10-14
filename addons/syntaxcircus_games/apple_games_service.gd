@@ -12,6 +12,7 @@ var _kit: Object
 var _signed_in := false
 var _scores: Dictionary = {} # board id -> Array of value, answered in order
 var _achievements: Dictionary = {} # achievement id -> count of reports waiting for an answer
+var _rank_requests: Dictionary = {} # caller request token -> board id
 var _panels := 0 # panels shown and not yet answered
 
 static func available() -> bool:
@@ -29,6 +30,8 @@ func _init(kit: Object = null) -> void:
 	_kit.connect("achievement_reported", _on_achievement_reported)
 	_kit.connect("panel_closed", _on_panel_closed)
 	_kit.connect("panel_failed", _on_panel_failed)
+	if _kit.has_signal("player_rank_loaded"):
+		_kit.connect("player_rank_loaded", _on_player_rank_loaded)
 
 ## Maps a GameCenterKit error string to an interface code. Public so the mapping is pinned by a test.
 static func classify(error: String) -> String:
@@ -73,6 +76,21 @@ func submit_score(board_id: String, value: int) -> void:
 		_scores[board_id] = []
 	_scores[board_id].append(value)
 	_kit.call("submit_score", board_id, value)
+
+## Loads the local player's current global, all-time placement. Zero means there is no score.
+## Request tokens correlate asynchronous answers; callers must not reuse a token while it is pending.
+func load_player_rank(board_id: String, request: int = 0) -> void:
+	var extra := {"board": board_id, "rank": 0, "request": request}
+	if _kit == null or not _kit.has_method("load_player_rank") or not _kit.has_signal("player_rank_loaded"):
+		rank_finished.emit(outcome(CODE_UNAVAILABLE, extra))
+		return
+	if not _signed_in:
+		rank_finished.emit(outcome(CODE_SIGNED_OUT, extra))
+		return
+	if _rank_requests.has(request):
+		return # the same outstanding request must only be dispatched and answered once
+	_rank_requests[request] = board_id
+	_kit.call("load_player_rank", board_id, request)
 
 ## The weekly flag is ignored: Game Center's Daily is one recurring board whose current occurrence is what opens.
 func show_board(board_id: String, _weekly := false) -> void:
@@ -150,3 +168,12 @@ func _answer_panel() -> void:
 		return
 	_panels -= 1
 	board_closed.emit()
+
+func _on_player_rank_loaded(ok: bool, board: String, rank: int, request: int, error: String) -> void:
+	if not _rank_requests.has(request) or _rank_requests[request] != board:
+		return # unsolicited, stale, or mismatched answer
+	_rank_requests.erase(request)
+	var code := CODE_COMPLETED if ok else classify(error)
+	if code == CODE_SIGNED_OUT:
+		_signed_in = false
+	rank_finished.emit(outcome(code, {"board": board, "rank": maxi(rank, 0) if ok else 0, "request": request}))

@@ -6,6 +6,7 @@ const Android = preload("res://addons/syntaxcircus_games/android_games_service.g
 class FakePlugin extends Object:
 	signal sign_in_result(request: int, status: String, message: String)
 	signal score_result(request: int, status: String, message: String)
+	signal rank_result(request: int, status: String, rank: int, message: String)
 	signal achievement_result(request: int, status: String, message: String)
 	signal board_closed(request: int)
 	var calls: Array = []
@@ -19,6 +20,8 @@ class FakePlugin extends Object:
 		calls.append(["submit_score", board, score, request])
 	func show_leaderboard(board: String, time_span: int, request: int) -> void:
 		calls.append(["show_leaderboard", board, time_span, request])
+	func load_player_rank(board: String, request: int) -> void:
+		calls.append(["load_player_rank", board, request])
 	func unlock(id: String, request: int) -> void:
 		calls.append(["unlock", id, request])
 	func set_steps(id: String, steps: int, request: int) -> void:
@@ -56,6 +59,8 @@ func run() -> void:
 	test_sign_in()
 	test_signed_out_short_circuits()
 	test_scores()
+	test_ranks()
+	test_rank_callbacks_do_not_cross_adapters()
 	test_boards()
 	test_achievements()
 	test_unknown_requests_are_ignored()
@@ -66,6 +71,7 @@ func listen(service: RefCounted) -> void:
 	answers.clear()
 	service.sign_in_finished.connect(func(result: Dictionary): answers.append(["sign_in", result]))
 	service.score_finished.connect(func(result: Dictionary): answers.append(["score", result]))
+	service.rank_finished.connect(func(result: Dictionary): answers.append(["rank", result]))
 	service.achievement_finished.connect(func(result: Dictionary): answers.append(["achievement", result]))
 	service.board_closed.connect(func(): answers.append(["board_closed", {}]))
 
@@ -163,6 +169,46 @@ func test_boards() -> void:
 	service.show_achievements()
 	plugin.board_closed.emit(plugin.last_request("show_achievements"))
 	check(answers.size() == 3, "Achievements UI answers board_closed too")
+	plugin.free()
+
+func test_ranks() -> void:
+	var plugin := FakePlugin.new()
+	var service = Android.new(plugin)
+	listen(service)
+	service.load_player_rank("lb", 70)
+	check(answers.back()[1].code == "signed_out" and answers.back()[1].request == 70 and plugin.calls.is_empty(), "Rank lookup respects sign-in consent")
+	service = signed_in(plugin)
+	service.load_player_rank("lb", 71)
+	var request := plugin.last_request("load_player_rank")
+	check(plugin.calls.back()[1] == "lb" and answers.is_empty(), "Rank lookup waits for the matching native answer")
+	plugin.rank_result.emit(request + 99, "completed", 1, "")
+	check(answers.is_empty(), "Unknown rank request is ignored")
+	plugin.rank_result.emit(request, "completed", 10, "")
+	plugin.rank_result.emit(request, "completed", 1, "")
+	check(answers.size() == 1 and answers[0][1] == {"ok": true, "code": "completed", "board": "lb", "rank": 10, "request": 71}, "Rank keeps board, rank and caller token and ignores duplicates")
+	for status in ["completed", "unavailable", "nonsense", "signed_out"]:
+		service.load_player_rank("lb", 72)
+		plugin.rank_result.emit(plugin.last_request("load_player_rank"), status, -1, "")
+		check(answers.back()[1].rank == 0 and answers.back()[1].code == ("failed" if status == "nonsense" else status), "Absent/error ranks return zero with mapped status")
+	check(not service.is_signed_in(), "Rank signed_out updates authentication state")
+	plugin.free()
+
+func test_rank_callbacks_do_not_cross_adapters() -> void:
+	var plugin := FakePlugin.new()
+	var old_service = signed_in(plugin)
+	old_service.load_player_rank("lb", 81)
+	var old_request := plugin.last_request("load_player_rank")
+	var current = Android.new(plugin)
+	var current_answers: Array = []
+	current.rank_finished.connect(func(result: Dictionary): current_answers.append(result))
+	current.sign_in()
+	plugin.sign_in_result.emit(plugin.last_request("sign_in"), "completed", "")
+	current.load_player_rank("lb", 82)
+	var current_request := plugin.last_request("load_player_rank")
+	plugin.rank_result.emit(old_request, "completed", 1, "")
+	check(current_answers.is_empty(), "A late previous-adapter rank cannot satisfy the current adapter request")
+	plugin.rank_result.emit(current_request, "completed", 11, "")
+	check(current_answers.size() == 1 and current_answers[0].rank == 11 and current_answers[0].request == 82, "The current adapter receives only its own native rank and caller token")
 	plugin.free()
 
 func test_achievements() -> void:
