@@ -58,6 +58,21 @@ func make_games_service() -> RefCounted:
 
 Needs JDK 17 and the Android SDK (`ANDROID_HOME`), Godot 4.7.2 for the GDScript tests.
 
+## Releases
+
+Push a stable tag such as `v0.1.2` to build, test, and publish a GitHub release automatically.
+The release contains `SyntaxCircus.Godot.GamesServices-<version>.zip` and `manifest.json`.
+The packaged `plugin.cfg` version is stamped from the tag; source files are left untouched.
+The manifest records the tagged source commit and SHA-256 hashes of the archive and every shipped file.
+
+The Release workflow can also be run manually from the default branch with an existing `vX.Y.Z` tag.
+It builds that exact tag, using the current workflow's packaging tooling. This supports tags created before automation existed.
+An existing release is never overwritten; delete an incomplete release deliberately before retrying.
+`publish.ps1 -DryRun` only builds and tests locally and never creates a tag or publishes a release.
+Use a new version or remove the corresponding local `dist/<version>` folder deliberately before rebuilding.
+
+Run the packaging regression checks with `pwsh -File tests/test_package_release.ps1`.
+
 ## License
 
 MIT, see [LICENSE.txt](LICENSE.txt).
