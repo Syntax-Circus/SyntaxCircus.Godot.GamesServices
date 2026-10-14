@@ -11,8 +11,7 @@
 .PARAMETER SkipTests
     Skip the Kotlin and GDScript tests (the build still runs).
 .PARAMETER DryRun
-    Build, test and write dist/ but do nothing else. Present for parity with the other Syntax Circus repos: this repo publishes
-    by tagging and attaching dist/<version>/ to the release, which is a manual step.
+    Build, test and write dist/ locally. This script never publishes; the tag release workflow uploads its outputs.
 #>
 [CmdletBinding()]
 param(
@@ -36,6 +35,7 @@ if (-not $Version) {
     if ($cfg -notmatch '(?m)^version="([^"]+)"') { throw 'plugin.cfg has no version' }
     $Version = $Matches[1]
 }
+if ($Version -notmatch '^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$') { throw 'Version must be X.Y.Z (without a v prefix)' }
 Write-Host "==> SyntaxCircus.Godot.GamesServices $Version" -ForegroundColor Cyan
 
 if (-not $JavaHome) { throw 'Set JAVA_HOME (JDK 17) or pass -JavaHome' }
@@ -72,39 +72,11 @@ if (-not $SkipTests) {
 }
 
 Write-Host '==> dist' -ForegroundColor Cyan
-$dist = Join-Path $root "dist/$Version"
-if (Test-Path -LiteralPath $dist) { Remove-Item -LiteralPath $dist -Recurse -Force }
-New-Item -ItemType Directory -Path $dist | Out-Null
-
-# Editor-written files never ship: .uid beside scripts and .import beside imported assets.
-$files = Get-ChildItem -LiteralPath $addon -Recurse -File | Where-Object { $_.Extension -notin '.uid', '.import' } | Sort-Object FullName
-$entries = foreach ($file in $files) {
-    $relative = 'addons/syntaxcircus_games/' + $file.FullName.Substring($addon.Length + 1).Replace('\', '/')
-    [ordered]@{ path = $relative; sha256 = (Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash.ToLowerInvariant() }
+$sourceCommit = $null
+# Source archives have no repository metadata; do not inherit an enclosing checkout.
+if (Test-Path -LiteralPath (Join-Path $root '.git')) {
+    $sourceCommit = & git -C $root rev-parse HEAD
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot determine source commit' }
 }
-
-$archiveName = "SyntaxCircus.Godot.GamesServices-$Version.zip"
-$archive = Join-Path $dist $archiveName
-$stage = Join-Path $dist 'stage'
-New-Item -ItemType Directory -Path (Join-Path $stage 'addons') | Out-Null
-Copy-Item -LiteralPath $addon -Destination (Join-Path $stage 'addons/syntaxcircus_games') -Recurse
-Get-ChildItem -LiteralPath $stage -Recurse -File | Where-Object { $_.Extension -in '.uid', '.import' } | Remove-Item -Force
-Compress-Archive -Path (Join-Path $stage 'addons') -DestinationPath $archive
-Remove-Item -LiteralPath $stage -Recurse -Force
-
-$manifest = [ordered]@{
-    name           = 'SyntaxCircus.Godot.GamesServices'
-    source         = 'https://github.com/Syntax-Circus/SyntaxCircus.Godot.GamesServices'
-    version        = "v$Version"
-    release        = "https://github.com/Syntax-Circus/SyntaxCircus.Godot.GamesServices/releases/tag/v$Version"
-    archive        = $archiveName
-    archive_sha256 = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
-    license        = 'MIT'
-    godot          = '4.7'
-    notes          = 'Copied byte for byte into a game under addons/syntaxcircus_games. The Android plugin singleton is SyntaxCircusGames; the iOS adapter drives the GameCenterKit singleton, which the game vendors separately. Exclude addons/syntaxcircus_games/** from the exported PCK.'
-    files          = @($entries)
-}
-$manifest | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $dist 'manifest.json') -Encoding utf8
-
-Write-Host "==> Done: $dist ($($entries.Count) files)" -ForegroundColor Green
-if ($DryRun) { Write-Host 'Dry run: nothing else to do. To release, commit, tag v$Version and attach dist/$Version/.' }
+& (Join-Path $root 'scripts/package-release.ps1') -AddonPath $addon -Version $Version -OutputDirectory (Join-Path $root 'dist') -SourceCommit $sourceCommit
+if ($DryRun) { Write-Host 'Dry run: package built and tested locally; no tag or GitHub release created.' }
