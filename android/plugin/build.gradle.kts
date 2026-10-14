@@ -33,4 +33,16 @@ dependencies {
     compileOnly("org.godotengine:godot:4.7.2.stable")
     compileOnly("com.google.android.gms:play-services-games-v2:22.1.0")
     testImplementation("junit:junit:4.13.2")
+    testImplementation("com.android.tools.build:manifest-merger:31.6.1")
+    testImplementation("com.android.tools:common:31.6.1")
+}
+
+
+tasks.withType<Test>().configureEach {
+    dependsOn("bundleDebugAar")
+    doFirst {
+        systemProperty("gamesSdkAar", configurations.getByName("debugCompileClasspath").files.single {
+            it.name == "play-services-games-v2-22.1.0.aar"
+        }.absolutePath)
+    }
 }
